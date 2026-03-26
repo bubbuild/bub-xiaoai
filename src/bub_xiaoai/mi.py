@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from aiohttp import ClientSession, ClientTimeout
+from loguru import logger
 from miservice import MiAccount, MiIOService, MiNAService, miio_command
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
