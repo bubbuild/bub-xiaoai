@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from aiohttp import ClientSession, ClientTimeout
-from loguru import logger
 from miservice import MiAccount, MiIOService, MiNAService, miio_command
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .static_server import TempStaticFileServer
 
 LATEST_ASK_API = (
     "https://userprofile.mina.mi.com/device_profile/v2/conversation"
@@ -66,6 +67,7 @@ class XiaoAiMessageListener:
         self._session: ClientSession | None = None
         self._mina_service: MiNAService | None = None
         self._miio_service: MiIOService | None = None
+        self.static_server = TempStaticFileServer()
 
     async def __aenter__(self) -> XiaoAiMessageListener:
         await self.start()
@@ -92,11 +94,20 @@ class XiaoAiMessageListener:
             raise RuntimeError("listener has not been started")
         return self._session
 
+    @property
+    def temp_dir(self) -> Path:
+        return self.static_server.temp_dir
+
+    @property
+    def static_server_origin(self) -> str:
+        return self.static_server.origin
+
     async def start(self) -> None:
         if self._session is not None:
             return
         self._session = ClientSession()
         try:
+            await self.static_server.start()
             await self._login()
             await self._init_hardware()
             self._cookie_header = self._build_cookie_header()
@@ -105,6 +116,8 @@ class XiaoAiMessageListener:
             raise
 
     async def close(self) -> None:
+        await self.static_server.close()
+
         if self._session is not None:
             await self._session.close()
             self._session = None
@@ -271,8 +284,12 @@ class XiaoAiMessageListener:
                 break
             await asyncio.sleep(1)
 
-    async def play_url(self, url: str) -> None:
-        """Play a media URL on XiaoAi."""
+    async def play_url_or_file(self, url_or_file: str) -> None:
+        """Play a media URL or file on XiaoAi."""
+        if "://" in url_or_file:
+            url = url_or_file
+        else:
+            url = self.static_server.file_url(url_or_file)
         await self.mina_service.play_by_url(self.device_id, url, _type=1)
 
 

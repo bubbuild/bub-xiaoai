@@ -35,3 +35,10 @@ async def xiaoai_speak(context: ToolContext, text: str) -> None:
     """Make a TTS request to XiaoAi."""
     listener = _get_xiaoai(context)
     await listener.speak(text)
+
+
+@tool(name="xiaoai.play", context=True)
+async def xiaoai_play(context: ToolContext, url_or_file: str) -> None:
+    """Play a media URL or file on XiaoAi."""
+    listener = _get_xiaoai(context)
+    await listener.play_url_or_file(url_or_file)

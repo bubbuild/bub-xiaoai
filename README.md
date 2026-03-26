@@ -16,6 +16,7 @@ This project does not provide a standalone CLI runner for XiaoAi. It is meant to
 - Message polling from XiaoAi via Xiaomi Mina APIs
 - TTS playback through the XiaoAi speaker
 - Automatic wake-up after a reply to keep conversation going
+- Temporary static file HTTP server started with the listener lifecycle
 - Bub tool `xiaoai.speak`
 - Bundled skill `xiaoai` under `src/skills/xiaoai` to instruct the LLM to call `xiaoai.speak`
 
@@ -27,6 +28,7 @@ At runtime the plugin creates a single `XiaoAiMessageListener`, registers a Bub 
 - Tool: `xiaoai.speak(text: str)`
 
 Incoming XiaoAi queries are turned into Bub `ChannelMessage` objects. The assistant should answer by calling `xiaoai.speak`, which performs TTS on the device.
+When the listener starts, it also creates a temporary directory and serves it through a local HTTP server for the same lifecycle window. The directory is available through `listener.static_server.temp_dir`, and the base URL is available through `listener.static_server.origin`.
 
 The channel currently runs in continuous conversation mode by default:
 

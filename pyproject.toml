@@ -10,7 +10,6 @@ requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.12.14",
     "miservice-fork>=2.7.11",
-    "tetos>=0.4.3",
 ]
 
 [project.entry-points.bub]
