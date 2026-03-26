@@ -1,0 +1,24 @@
+[project]
+name = "bub-xiaoai"
+version = "0.1.0"
+description = "A Bub channel to communicate with XiaoAi speaker"
+readme = "README.md"
+authors = [
+    { name = "Frost Ming", email = "me@frostming.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "tetos>=0.4.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.1,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "bub",
+]
+
+[tool.uv.sources]
+bub = { git = "https://github.com/bubbuild/bub.git" }
