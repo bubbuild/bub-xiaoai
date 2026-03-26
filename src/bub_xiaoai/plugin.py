@@ -57,9 +57,12 @@ async def xiaoai_listen(context: ToolContext) -> str:
     await listener.wait_for_tts_finish()
     await listener.wakeup_xiaoai()
     await listener.stop_if_xiaoai_is_playing()
-    async with asyncio.timeout(6):
-        async for message in listener.listen():
-            query = message.get("query", "").strip()
-            if query:
-                return f"XiaoAi received: {query}"
+    try:
+        async with asyncio.timeout(15):
+            async for message in listener.listen():
+                query = message.get("query", "").strip()
+                if query:
+                    return f"XiaoAi received: {query}"
+    except asyncio.TimeoutError:
+        pass
     return "No message received from XiaoAi within timeout, you can end the turn now."
