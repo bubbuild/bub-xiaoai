@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from bub.channels import Channel, ChannelMessage
 from bub.types import MessageHandler
 from loguru import logger
 
-from .mi import XiaoAiMessageListener
+from .mi import WAKEUP_KEYWORD, XiaoAiMessageListener
 
 
 class XiaoAiChannel(Channel):
@@ -24,6 +24,10 @@ class XiaoAiChannel(Channel):
     async def _in_processing(self) -> AsyncIterator[None]:
         await self.listener.stop_if_xiaoai_is_playing()
         yield
+        await self.listener.wait_for_tts_finish()
+        with suppress(Exception):
+            await self.listener.wakeup_xiaoai()
+            await self.listener.stop_if_xiaoai_is_playing()
 
     async def start(self, stop_event: asyncio.Event) -> None:
         self._ongoing_task = asyncio.create_task(self._main_loop())
@@ -38,7 +42,7 @@ class XiaoAiChannel(Channel):
             self._ongoing_task = None
 
     def _build_message(self, message: dict[str, Any]) -> ChannelMessage:
-        content = message["query"]
+        content = message["query"].strip()
         chat_id = self.listener.config.chat_id
 
         return ChannelMessage(
@@ -55,7 +59,10 @@ class XiaoAiChannel(Channel):
         try:
             async with self.listener as listener:
                 async for msg in listener.listen():
-                    logger.info("channel.xiaoai: received message: %s", msg["query"])
+                    query = msg["query"].strip()
+                    if query == WAKEUP_KEYWORD:
+                        continue
+                    logger.info("channel.xiaoai: received message: {}", query)
                     await self.on_receive(self._build_message(msg))
         finally:
             logger.info("channel.xiaoai: stopped listening for messages")

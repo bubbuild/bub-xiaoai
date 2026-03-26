@@ -18,6 +18,7 @@ LATEST_ASK_API = (
 )
 COOKIE_TEMPLATE = "deviceId={device_id}; serviceToken={service_token}; userId={user_id}"
 DEFAULT_MI_TOKEN_HOME = Path.home() / ".mi.token"
+WAKEUP_KEYWORD = "小爱同学"
 HARDWARE_COMMAND_DICT = {
     # hardware: (tts_command, wakeup_command)
     "LX06": ("5-1", "5-5"),
@@ -244,6 +245,10 @@ class XiaoAiMessageListener:
     def tts_command(self) -> str:
         return HARDWARE_COMMAND_DICT.get(self.config.hardware, DEFAULT_COMMAND)[0]
 
+    @property
+    def wakeup_command(self) -> str:
+        return HARDWARE_COMMAND_DICT.get(self.config.hardware, DEFAULT_COMMAND)[1]
+
     async def speak(self, text: str) -> None:
         """Make a TTS request to XiaoAi."""
         try:
@@ -252,6 +257,19 @@ class XiaoAiMessageListener:
             await miio_command(
                 self.miio_service, self.config.mi_did, f"{self.tts_command} {text}"
             )
+
+    async def wakeup_xiaoai(self) -> None:
+        await miio_command(
+            self.miio_service,
+            self.config.mi_did,
+            f"{self.wakeup_command} {WAKEUP_KEYWORD} 0",
+        )
+
+    async def wait_for_tts_finish(self):
+        while True:
+            if not await self.get_if_xiaoai_is_playing():
+                break
+            await asyncio.sleep(1)
 
     async def play_url(self, url: str) -> None:
         """Play a media URL on XiaoAi."""
