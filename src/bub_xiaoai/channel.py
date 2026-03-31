@@ -27,7 +27,7 @@ class XiaoAiChannel(Channel):
         await self.listener.wait_for_tts_finish()
 
     async def start(self, stop_event: asyncio.Event) -> None:
-        self._ongoing_task = asyncio.create_task(self._main_loop())
+        self._ongoing_task = asyncio.create_task(self._main_loop(stop_event))
 
     async def stop(self) -> None:
         if self._ongoing_task is not None:
@@ -51,7 +51,7 @@ class XiaoAiChannel(Channel):
             lifespan=self._in_processing(),
         )
 
-    async def _main_loop(self) -> None:
+    async def _main_loop(self, stop_event: asyncio.Event) -> None:
         logger.info("channel.xiaoai: started listening for messages")
         try:
             async with self.listener as listener:
@@ -59,5 +59,8 @@ class XiaoAiChannel(Channel):
                     query = msg["query"].strip()
                     logger.info("channel.xiaoai: received message: {}", query)
                     await self.on_receive(self._build_message(msg))
+        except Exception:
+            logger.exception("channel.xiaoai: error while listening for messages")
         finally:
+            stop_event.set()
             logger.info("channel.xiaoai: stopped listening for messages")
