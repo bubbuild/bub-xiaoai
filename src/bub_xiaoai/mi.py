@@ -265,7 +265,7 @@ class XiaoAiMessageListener:
         return HARDWARE_COMMAND_DICT.get(self.config.hardware, DEFAULT_COMMAND)[0]
 
     @property
-    def wakeup_command(self) -> str:
+    def exec_command(self) -> str:
         return HARDWARE_COMMAND_DICT.get(self.config.hardware, DEFAULT_COMMAND)[1]
 
     async def speak(self, text: str) -> None:
@@ -277,11 +277,25 @@ class XiaoAiMessageListener:
                 self.miio_service, self.config.mi_did, f"{self.tts_command} {text}"
             )
 
+    async def execute(self, text: str, silent: bool = False) -> None:
+        """Execute a command on XiaoAi."""
+        await miio_command(
+            self.miio_service,
+            self.config.mi_did,
+            f"{self.exec_command} {text} {0 if silent else 1}",
+        )
+        if text.strip().lower() == WAKEUP_KEYWORD.strip().lower():
+            return
+        # skip the next message
+        async for message in self.listen():
+            if message.get("query", "").strip().lower() == text.strip().lower():
+                break
+
     async def wakeup_xiaoai(self) -> None:
         await miio_command(
             self.miio_service,
             self.config.mi_did,
-            f"{self.wakeup_command} {WAKEUP_KEYWORD} 0",
+            f"{self.exec_command} {WAKEUP_KEYWORD} 0",
         )
 
     async def wait_for_tts_finish(self):

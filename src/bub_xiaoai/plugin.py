@@ -66,3 +66,11 @@ async def xiaoai_listen(context: ToolContext) -> str:
     except asyncio.TimeoutError:
         pass
     return "No message received from XiaoAi within timeout, you can end the turn now."
+
+
+@tool(name="xiaoai.exec", context=True)
+async def xiaoai_exec(context: ToolContext, command: str) -> str:
+    """Execute a command on the device where XiaoAi is running."""
+    listener = _get_xiaoai(context)
+    await listener.execute(command)
+    return "Command executed successfully"
