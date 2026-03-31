@@ -126,7 +126,8 @@ class XiaoAiMessageListener:
 
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
         while True:
-            message = await self.fetch_latest_message()
+            async with self._lock:
+                message = await self.fetch_latest_message()
             if (
                 message is not None
                 and message.get("query", "").strip() != WAKEUP_KEYWORD
@@ -135,19 +136,18 @@ class XiaoAiMessageListener:
             await asyncio.sleep(self.config.poll_interval)
 
     async def fetch_latest_message(self) -> dict[str, Any] | None:
-        async with self._lock:
-            timeout = ClientTimeout(total=self.config.request_timeout)
-            response = await self.session.get(
-                LATEST_ASK_API.format(
-                    hardware=self.config.hardware,
-                    timestamp=int(time.time() * 1000),
-                ),
-                headers={"Cookie": self._cookie_header},
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            payload = await response.json()
-            return self._extract_message(payload)
+        timeout = ClientTimeout(total=self.config.request_timeout)
+        response = await self.session.get(
+            LATEST_ASK_API.format(
+                hardware=self.config.hardware,
+                timestamp=int(time.time() * 1000),
+            ),
+            headers={"Cookie": self._cookie_header},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = await response.json()
+        return self._extract_message(payload)
 
     async def _login(self) -> None:
         if self.config.cookie:
@@ -279,17 +279,21 @@ class XiaoAiMessageListener:
 
     async def execute(self, text: str, silent: bool = False) -> None:
         """Execute a command on XiaoAi."""
-        await miio_command(
-            self.miio_service,
-            self.config.mi_did,
-            f"{self.exec_command} {text} {0 if silent else 1}",
-        )
-        if text.strip().lower() == WAKEUP_KEYWORD.strip().lower():
-            return
-        # skip the next message
-        async for message in self.listen():
-            if message.get("query", "").strip().lower() == text.strip().lower():
-                break
+        async with self._lock:
+            await miio_command(
+                self.miio_service,
+                self.config.mi_did,
+                f"{self.exec_command} {text} {0 if silent else 1}",
+            )
+            # skip the next message
+            while True:
+                message = await self.fetch_latest_message()
+                if (
+                    message is not None
+                    and message.get("query", "").lower().strip() == text.lower().strip()
+                ):
+                    break
+                await asyncio.sleep(self.config.poll_interval)
 
     async def wakeup_xiaoai(self) -> None:
         await miio_command(

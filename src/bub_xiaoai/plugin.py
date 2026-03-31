@@ -37,21 +37,21 @@ class XiaoAiPlugin:
 
 
 @tool(name="xiaoai.speak", context=True)
-async def xiaoai_speak(context: ToolContext, text: str) -> None:
+async def xiaoai_speak(text: str, *, context: ToolContext) -> None:
     """Make a TTS request to XiaoAi."""
     listener = _get_xiaoai(context)
     await listener.speak(text)
 
 
 @tool(name="xiaoai.play", context=True)
-async def xiaoai_play(context: ToolContext, url_or_file: str) -> None:
+async def xiaoai_play(url_or_file: str, *, context: ToolContext) -> None:
     """Play a media URL or file on XiaoAi."""
     listener = _get_xiaoai(context)
     await listener.play_url_or_file(url_or_file)
 
 
 @tool(name="xiaoai.listen", context=True)
-async def xiaoai_listen(context: ToolContext) -> str:
+async def xiaoai_listen(*, context: ToolContext) -> str:
     """Listen for the next message from XiaoAi and return its content."""
     listener = _get_xiaoai(context)
     await listener.wait_for_tts_finish()
@@ -69,7 +69,7 @@ async def xiaoai_listen(context: ToolContext) -> str:
 
 
 @tool(name="xiaoai.exec", context=True)
-async def xiaoai_exec(context: ToolContext, command: str) -> str:
+async def xiaoai_exec(command: str, *, context: ToolContext) -> str:
     """Execute a command on the device where XiaoAi is running."""
     listener = _get_xiaoai(context)
     await listener.execute(command)
