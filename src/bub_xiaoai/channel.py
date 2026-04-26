@@ -39,7 +39,13 @@ class XiaoAiChannel(Channel):
             self._ongoing_task = None
 
     def _build_message(self, message: dict[str, Any]) -> ChannelMessage:
-        content = message["query"].strip()
+        content = "Query: " + message["query"].strip()
+        answers = message.get("answers", [])
+        if answers and answers[0].get("type") == "TTS":
+            content += (
+                "\n---\nOriginal answer: "
+                + answers[0].get("tts", {}).get("text", "").strip()
+            )
         chat_id = self.listener.config.chat_id
 
         return ChannelMessage(
