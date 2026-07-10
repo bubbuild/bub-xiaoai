@@ -3,18 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, TypeVar
 
 from aiohttp import ClientSession, ClientTimeout
 from loguru import logger
 from mijiaAPI import LoginError as MijiaLoginError
 from mijiaAPI import mijiaAPI as MijiaAPI
-from miservice import MiAccount, MiIOService, MiNAService, MiTokenStore, miio_command
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .static_server import TempStaticFileServer
+from .xiaomi import MicoClient
 
 LATEST_ASK_API = (
     "https://userprofile.mina.mi.com/device_profile/v2/conversation"
@@ -45,6 +46,7 @@ HARDWARE_COMMAND_DICT = {
 }
 
 DEFAULT_COMMAND = ("5-1", "5-5")
+T = TypeVar("T")
 MIJIA_AUTH_KEYS = frozenset(
     {"cUserId", "serviceToken", "ssecurity", "ua", "userId"}
 )
@@ -56,7 +58,7 @@ def _login_with_mijia(auth_path: Path) -> dict[str, Any]:
         with auth_path.open(encoding="utf-8") as file:
             auth_data = json.load(file)
         if not MIJIA_AUTH_KEYS.issubset(auth_data):
-            # Keep a legacy miservice token intact until QR authentication succeeds.
+            # Keep a legacy token intact until QR authentication succeeds.
             login_path = auth_path.with_name(f"{auth_path.name}.mijia")
 
     auth_data = MijiaAPI(str(login_path)).login()
@@ -65,18 +67,10 @@ def _login_with_mijia(auth_path: Path) -> dict[str, Any]:
     return auth_data
 
 
-class PatchMiTokenStore(MiTokenStore):
-    def save_token(self, token=None):
-        if token is not None:
-            return super().save_token(token)
-
-
 class XiaoAiSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BUB_MI_", extra="ignore")
 
     hardware: str = "LX01"
-    account: str = ""
-    password: str = ""
     mi_did: str = ""
     cookie: str = ""
     token_home: Path = DEFAULT_MI_TOKEN_HOME
@@ -92,8 +86,9 @@ class XiaoAiMessageListener:
         self.last_timestamp = int(time.time() * 1000)
         self._cookie_header = ""
         self._session: ClientSession | None = None
-        self._mina_service: MiNAService | None = None
-        self._miio_service: MiIOService | None = None
+        self._mico_client: MicoClient | None = None
+        self._mijia_api: MijiaAPI | None = None
+        self._mijia_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
         self.static_server = TempStaticFileServer()
 
@@ -105,16 +100,16 @@ class XiaoAiMessageListener:
         await self.close()
 
     @property
-    def mina_service(self) -> MiNAService:
-        if self._mina_service is None:
+    def mico_client(self) -> MicoClient:
+        if self._mico_client is None:
             raise RuntimeError("listener has not been started")
-        return self._mina_service
+        return self._mico_client
 
     @property
-    def miio_service(self) -> MiIOService:
-        if self._miio_service is None:
+    def mijia_api(self) -> MijiaAPI:
+        if self._mijia_api is None:
             raise RuntimeError("listener has not been started")
-        return self._miio_service
+        return self._mijia_api
 
     @property
     def session(self) -> ClientSession:
@@ -133,18 +128,30 @@ class XiaoAiMessageListener:
     async def start(self) -> None:
         if self._session is not None:
             return
-        self._session = ClientSession()
         try:
+            self._session = ClientSession()
             await self.static_server.start()
-            await self._login()
+            await self.authenticate()
             await self._init_hardware()
             self._cookie_header = self._build_cookie_header()
         except Exception:
             await self.close()
             raise
 
+    async def authenticate(self) -> None:
+        if self._session is None:
+            self._session = ClientSession()
+        if self.config.cookie or self._mico_client is not None:
+            return
+        await self._login()
+
     async def close(self) -> None:
         await self.static_server.close()
+
+        if self._mijia_api is not None:
+            await asyncio.to_thread(self._mijia_api.session.close)
+            self._mijia_api = None
+        self._mico_client = None
 
         if self._session is not None:
             await self._session.close()
@@ -180,33 +187,25 @@ class XiaoAiMessageListener:
             return
 
         try:
-            await asyncio.to_thread(_login_with_mijia, self.config.token_home)
+            auth_data = await asyncio.to_thread(
+                _login_with_mijia, self.config.token_home
+            )
         except MijiaLoginError as exc:
             raise RuntimeError(
                 "xiaomi QR login failed; scan the QR code with the Mi Home app "
                 "and retry"
             ) from exc
 
-        account = MiAccount(
-            self.session,
-            "",
-            "",
-            PatchMiTokenStore(str(self.config.token_home)),
-        )
-        ok = await account.login("micoapi")
-        if not ok:
-            raise RuntimeError(
-                "xiaomi micoapi login failed; remove the stale auth file and scan "
-                "the Mi Home QR code again, or configure a cookie explicitly"
-            )
-        self._mina_service = MiNAService(account)
-        self._miio_service = MiIOService(account)
+        self._mijia_api = MijiaAPI(str(self.config.token_home))
+        mico_client = MicoClient(self.session, auth_data)
+        await mico_client.authenticate()
+        self._mico_client = mico_client
 
     async def _init_hardware(self) -> None:
         if self.config.cookie:
             return
 
-        hardware_data = await self.mina_service.device_list()
+        hardware_data = await self.mico_client.device_list()
         for item in hardware_data:
             if self.config.mi_did and item.get("miotDID", "") == str(
                 self.config.mi_did
@@ -226,7 +225,7 @@ class XiaoAiMessageListener:
         if self.config.mi_did:
             return
 
-        devices = await self.miio_service.device_list()
+        devices = await self._call_mijia(self.mijia_api.get_devices_list)
         for device in devices:
             if device.get("model", "").endswith(self.config.hardware.lower()):
                 self.config.mi_did = str(device["did"])
@@ -241,25 +240,10 @@ class XiaoAiMessageListener:
             self.device_id = cookies["deviceId"]
             return self.config.cookie
 
-        if not self.config.token_home.exists():
-            raise RuntimeError(
-                f"token file not found: {self.config.token_home}; login did not "
-                "produce a usable token file"
-            )
-
-        with self.config.token_home.open(encoding="utf-8") as file:
-            user_data = json.load(file)
-        try:
-            user_id = user_data["userId"]
-            service_token = user_data["micoapi"][1]
-        except KeyError as exc:
-            raise RuntimeError(
-                f"invalid Xiaomi token file: missing {exc.args[0]}"
-            ) from exc
         return COOKIE_TEMPLATE.format(
             device_id=self.device_id,
-            service_token=service_token,
-            user_id=user_id,
+            service_token=self.mico_client.service_token,
+            user_id=self.mico_client.user_id,
         )
 
     def _extract_message(self, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -280,7 +264,7 @@ class XiaoAiMessageListener:
         return record
 
     async def get_if_xiaoai_is_playing(self):
-        playing_info = await self.mina_service.player_get_status(self.device_id)
+        playing_info = await self.mico_client.player_get_status(self.device_id)
         # WTF xiaomi api
         is_playing = (
             json.loads(playing_info.get("data", {}).get("info", "{}")).get("status", -1)
@@ -293,7 +277,7 @@ class XiaoAiMessageListener:
         if is_playing:
             logger.debug("Muting xiaoai")
             # stop it
-            await self.mina_service.player_pause(self.device_id)
+            await self.mico_client.player_pause(self.device_id)
 
     @property
     def tts_command(self) -> str:
@@ -306,20 +290,14 @@ class XiaoAiMessageListener:
     async def speak(self, text: str) -> None:
         """Make a TTS request to XiaoAi."""
         try:
-            await self.mina_service.text_to_speech(self.device_id, text)
+            await self.mico_client.text_to_speech(self.device_id, text)
         except Exception:
-            await miio_command(
-                self.miio_service, self.config.mi_did, f"{self.tts_command} {text}"
-            )
+            await self._run_action(self.tts_command, [text])
 
     async def execute(self, text: str, silent: bool = False) -> None:
         """Execute a command on XiaoAi."""
         async with self._lock:
-            await miio_command(
-                self.miio_service,
-                self.config.mi_did,
-                f"{self.exec_command} {text} {0 if silent else 1}",
-            )
+            await self._run_action(self.exec_command, [text, 0 if silent else 1])
             # skip the next message
             while True:
                 message = await self.fetch_latest_message()
@@ -331,11 +309,7 @@ class XiaoAiMessageListener:
                 await asyncio.sleep(self.config.poll_interval)
 
     async def wakeup_xiaoai(self) -> None:
-        await miio_command(
-            self.miio_service,
-            self.config.mi_did,
-            f"{self.exec_command} {WAKEUP_KEYWORD} 0",
-        )
+        await self._run_action(self.exec_command, [WAKEUP_KEYWORD, 0])
 
     async def wait_for_tts_finish(self):
         while True:
@@ -349,7 +323,30 @@ class XiaoAiMessageListener:
             url = url_or_file
         else:
             url = self.static_server.file_url(url_or_file)
-        await self.mina_service.play_by_url(self.device_id, url, _type=1)
+        await self.mico_client.play_by_url(self.device_id, url, media_type=1)
+
+    async def _call_mijia(
+        self,
+        method: Callable[..., T],
+        *args: Any,
+    ) -> T:
+        async with self._mijia_lock:
+            return await asyncio.to_thread(method, *args)
+
+    async def _run_action(self, command: str, values: list[Any]) -> dict[str, Any]:
+        siid, aiid = (int(part) for part in command.split("-", maxsplit=1))
+        result = await self._call_mijia(
+            self.mijia_api.run_action,
+            {
+                "did": self.config.mi_did,
+                "siid": siid,
+                "aiid": aiid,
+                "value": values,
+            },
+        )
+        if result.get("code", -1) not in (0, 1):
+            raise RuntimeError(f"mijia action failed: {result}")
+        return result
 
 
 def _parse_cookie_string(cookie_string: str) -> dict[str, str]:

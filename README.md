@@ -14,6 +14,7 @@ This project does not provide a standalone CLI runner for XiaoAi. It is meant to
 ## Features
 
 - Message polling from XiaoAi via Xiaomi Mina APIs
+- QR authentication and MIoT actions through `mijiaAPI`
 - TTS playback through the XiaoAi speaker
 - Automatic wake-up after a reply to keep conversation going
 - Temporary static file HTTP server started with the listener lifecycle
@@ -125,7 +126,9 @@ Relevant implementation files:
 
 ## Design notes
 
-- The Xiaomi integration logic is adapted from `xiaogpt`, especially device discovery, conversation polling, and MiIO wake-up commands.
+- Authentication, device discovery, and MIoT actions use `mijiaAPI`.
+- The small Mina client is maintained locally because `mijiaAPI` does not expose XiaoAi playback and UBus endpoints.
+- The XiaoAi integration approach is adapted from `xiaogpt`, especially conversation polling and Mina playback commands.
 - The code is intentionally scoped to Bub integration instead of reproducing all of `xiaogpt`.
 - There is no prompt management, model orchestration, or standalone command runner here.
 
@@ -152,6 +155,16 @@ from bub_xiaoai import XiaoAiMessageListener, XiaoAiSettings
 print(XiaoAiMessageListener, XiaoAiSettings)
 PY
 ```
+
+Verify Xiaomi authentication without starting the Bub runtime:
+
+```bash
+uv run python scripts/test_xiaoai_auth.py
+uv run python scripts/test_xiaoai_auth.py --auth-path /path/to/auth.json
+```
+
+On first use, scan the QR code with the Mi Home app. The script verifies both
+Mi Home access and the micoapi credentials required by XiaoAi Mina endpoints.
 
 ## Credits
 

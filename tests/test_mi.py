@@ -37,7 +37,9 @@ class MijiaAuthMigrationTest(TestCase):
 
             api_type.assert_called_once_with(str(login_path))
             self.assertEqual(result, new_auth)
-            self.assertEqual(json.loads(auth_path.read_text(encoding="utf-8")), new_auth)
+            self.assertEqual(
+                json.loads(auth_path.read_text(encoding="utf-8")), new_auth
+            )
             self.assertFalse(login_path.exists())
 
     def test_legacy_token_is_preserved_when_mijia_login_fails(self) -> None:
@@ -64,35 +66,42 @@ class XiaoAiMessageListenerLoginTest(IsolatedAsyncioTestCase):
             listener._session = MagicMock()
 
             events: list[str] = []
+            auth_data = {"userId": "user", "deviceId": "device", "passToken": "pass"}
             mijia_api = MagicMock()
-            mijia_api.login.side_effect = lambda: events.append("mijia")
-            account = MagicMock()
-            account.login = AsyncMock(
-                side_effect=lambda sid: events.append(sid) or True
+            mico_client = MagicMock()
+            mico_client.authenticate = AsyncMock(
+                side_effect=lambda: events.append("micoapi")
             )
 
             with (
+                patch(
+                    "bub_xiaoai.mi._login_with_mijia",
+                    side_effect=lambda path: events.append("mijia") or auth_data,
+                ) as login,
                 patch("bub_xiaoai.mi.MijiaAPI", return_value=mijia_api) as api_type,
-                patch("bub_xiaoai.mi.MiAccount", return_value=account) as account_type,
+                patch(
+                    "bub_xiaoai.mi.MicoClient", return_value=mico_client
+                ) as client_type,
             ):
                 await listener._login()
 
+            login.assert_called_once_with(token_home)
             api_type.assert_called_once_with(str(token_home))
-            account_type.assert_called_once()
-            account.login.assert_awaited_once_with("micoapi")
+            client_type.assert_called_once_with(listener.session, auth_data)
+            mico_client.authenticate.assert_awaited_once_with()
             self.assertEqual(events, ["mijia", "micoapi"])
 
     async def test_login_skips_authentication_when_cookie_is_configured(self) -> None:
         listener = XiaoAiMessageListener(XiaoAiSettings(cookie="deviceId=test"))
 
         with (
-            patch("bub_xiaoai.mi.MijiaAPI") as api_type,
-            patch("bub_xiaoai.mi.MiAccount") as account_type,
+            patch("bub_xiaoai.mi._login_with_mijia") as login,
+            patch("bub_xiaoai.mi.MicoClient") as client_type,
         ):
             await listener._login()
 
-        api_type.assert_not_called()
-        account_type.assert_not_called()
+        login.assert_not_called()
+        client_type.assert_not_called()
 
     async def test_login_wraps_mijia_login_failure(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -114,13 +123,36 @@ class XiaoAiMessageListenerLoginTest(IsolatedAsyncioTestCase):
                 XiaoAiSettings(token_home=Path(temp_dir) / "auth.json")
             )
             listener._session = MagicMock()
-            account = MagicMock()
-            account.login = AsyncMock(return_value=False)
+            auth_data = {"userId": "user", "deviceId": "device", "passToken": "pass"}
+            mico_client = MagicMock()
+            mico_client.authenticate = AsyncMock(
+                side_effect=RuntimeError("micoapi token exchange failed")
+            )
 
             with (
-                patch("bub_xiaoai.mi.MijiaAPI") as api_type,
-                patch("bub_xiaoai.mi.MiAccount", return_value=account),
+                patch("bub_xiaoai.mi._login_with_mijia", return_value=auth_data),
+                patch("bub_xiaoai.mi.MijiaAPI"),
+                patch("bub_xiaoai.mi.MicoClient", return_value=mico_client),
             ):
-                api_type.return_value.login.return_value = {}
-                with self.assertRaisesRegex(RuntimeError, "micoapi login failed"):
+                with self.assertRaisesRegex(RuntimeError, "token exchange failed"):
                     await listener._login()
+
+    async def test_run_action_maps_hardware_command_to_mijia_api(self) -> None:
+        listener = XiaoAiMessageListener(
+            XiaoAiSettings(mi_did="123", hardware="LX06")
+        )
+        mijia_api = MagicMock()
+        mijia_api.run_action.return_value = {"code": 0}
+        listener._mijia_api = mijia_api
+
+        result = await listener._run_action(listener.exec_command, ["hello", 0])
+
+        mijia_api.run_action.assert_called_once_with(
+            {
+                "did": "123",
+                "siid": 5,
+                "aiid": 5,
+                "value": ["hello", 0],
+            }
+        )
+        self.assertEqual(result, {"code": 0})
