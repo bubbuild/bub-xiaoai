@@ -55,8 +55,6 @@ Settings are loaded from environment variables through `XiaoAiSettings` with pre
 Supported variables:
 
 - `BUB_MI_HARDWARE`
-- `BUB_MI_ACCOUNT`
-- `BUB_MI_PASSWORD`
 - `BUB_MI_MI_DID`
 - `BUB_MI_COOKIE`
 - `BUB_MI_TOKEN_HOME`
@@ -68,14 +66,16 @@ Defaults are defined in [src/bub_xiaoai/mi.py](/home/frost/workspace/bub-xiaoai/
 
 ### Authentication
 
-Two login modes are supported:
+Two authentication modes are supported:
 
-1. Xiaomi account + password
+1. Mi Home QR code
 2. Xiaomi cookie
 
 If `BUB_MI_COOKIE` is set, the plugin skips account login and uses the cookie directly.
 
-If you use account login, the plugin also expects a token file. In Bub runtime the default token path is:
+Otherwise, the plugin uses the `mijiaAPI` authentication flow. On first startup,
+scan the QR code shown in the terminal with the Mi Home app. Authentication data
+is reused and refreshed on later startups. In Bub runtime the default auth path is:
 
 ```text
 <bub-home>/mi_token.json
@@ -87,8 +87,6 @@ This is wired in [src/bub_xiaoai/plugin.py](/home/frost/workspace/bub-xiaoai/src
 
 ```bash
 export BUB_MI_HARDWARE=LX06
-export BUB_MI_ACCOUNT='your-xiaomi-account'
-export BUB_MI_PASSWORD='your-xiaomi-password'
 export BUB_MI_MI_DID='your-device-did'
 ```
 
@@ -133,7 +131,7 @@ Relevant implementation files:
 
 ## Known limitations
 
-- Xiaomi login can fail due to Xiaomi risk control. Cookie login is often more reliable.
+- Xiaomi QR login can fail due to Xiaomi risk control. Cookie login remains available as a fallback.
 - Automatic wake-up depends on MiIO commands and a usable `mi_did`.
 - The channel currently ignores the isolated wake word `小爱同学`.
 - Only the latest XiaoAi conversation records are polled; this is not a full history sync.

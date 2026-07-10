@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.12.14",
+    "mijiaapi>=4.1.2",
     "miservice-fork>=2.7.11",
 ]
 

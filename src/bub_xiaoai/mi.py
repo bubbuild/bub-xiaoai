@@ -9,6 +9,8 @@ from typing import Any, AsyncIterator
 
 from aiohttp import ClientSession, ClientTimeout
 from loguru import logger
+from mijiaAPI import LoginError as MijiaLoginError
+from mijiaAPI import mijiaAPI as MijiaAPI
 from miservice import MiAccount, MiIOService, MiNAService, MiTokenStore, miio_command
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -43,6 +45,24 @@ HARDWARE_COMMAND_DICT = {
 }
 
 DEFAULT_COMMAND = ("5-1", "5-5")
+MIJIA_AUTH_KEYS = frozenset(
+    {"cUserId", "serviceToken", "ssecurity", "ua", "userId"}
+)
+
+
+def _login_with_mijia(auth_path: Path) -> dict[str, Any]:
+    login_path = auth_path
+    if auth_path.exists():
+        with auth_path.open(encoding="utf-8") as file:
+            auth_data = json.load(file)
+        if not MIJIA_AUTH_KEYS.issubset(auth_data):
+            # Keep a legacy miservice token intact until QR authentication succeeds.
+            login_path = auth_path.with_name(f"{auth_path.name}.mijia")
+
+    auth_data = MijiaAPI(str(login_path)).login()
+    if login_path != auth_path:
+        login_path.replace(auth_path)
+    return auth_data
 
 
 class PatchMiTokenStore(MiTokenStore):
@@ -158,17 +178,26 @@ class XiaoAiMessageListener:
     async def _login(self) -> None:
         if self.config.cookie:
             return
+
+        try:
+            await asyncio.to_thread(_login_with_mijia, self.config.token_home)
+        except MijiaLoginError as exc:
+            raise RuntimeError(
+                "xiaomi QR login failed; scan the QR code with the Mi Home app "
+                "and retry"
+            ) from exc
+
         account = MiAccount(
             self.session,
-            self.config.account,
-            self.config.password,
+            "",
+            "",
             PatchMiTokenStore(str(self.config.token_home)),
         )
         ok = await account.login("micoapi")
         if not ok:
             raise RuntimeError(
-                "xiaomi login failed; verify MI_USER/MI_PASS, complete any Xiaomi "
-                "security verification in the account app, or use --cookie instead"
+                "xiaomi micoapi login failed; remove the stale auth file and scan "
+                "the Mi Home QR code again, or configure a cookie explicitly"
             )
         self._mina_service = MiNAService(account)
         self._miio_service = MiIOService(account)
